@@ -20,7 +20,7 @@ class Scoring(StatesGroup):
 @router.message(CommandStart())
 async def start_command(message: Message):
     await rq.set_user(message.from_user.id)
-    await message.answer('Добро пожаловать в finalb помомшник!\nЯ умею:\n/register - помощь в подборе финансового продукта\n/assistent - виртуальный финансовый асистент, который поможет в ответе на вопросы\n/scoring - проведение скоринга', reply_markup=kb.main)
+    await message.answer('Добро пожаловать в finalb помомшник!\nЯ умею:\n/register - помощь в подборе финансового продукта\n/assistent - виртуальный финансовый асистент, который поможет в ответе на вопросы\n/scoring - проведение скоринга')
 
 
 @router.message(Command('assistent'))
@@ -30,17 +30,17 @@ async def help_command(message: Message):
 @router.message(Command('scoring'))
 async def register_command(message: Message, state: FSMContext):
     await state.set_state(Scoring.name)
-    await message.answer('Для скоринговой оценки понадобится следующая информация: ФИО, номер телфона, ИНН.\nВведите ваше ФИО')
+    await message.answer('Для скоринговой оценки понадобится следующая информация: ФИО, номер телфона, ИНН.\n\nВведите ваше ФИО')
 
 @router.message(Scoring.name)
 async def register_name(message: Message, state: FSMContext):
      await state.update_data(name=message.text)
      await state.set_state(Scoring.number)
-     await message.answer('Введите ваш номер телефона', reply_markup=kb.get_number)
+     await message.answer('Введите ваш номер телефона')
 
-@router.message(Scoring.number, F.contact)
+@router.message(Scoring.number)
 async def register_number(message: Message, state: FSMContext):
-     await state.update_data(number=message.contact.phone_number)
+     await state.update_data(number=message.text)
      await state.set_state(Scoring.inn)
      await message.answer('Введите ваш инн')
 
