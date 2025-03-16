@@ -1,63 +1,122 @@
-from aiogram import F, Router
-from aiogram.types import Message, CallbackQuery
+from aiogram import F, Router, types
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from unittest.mock import patch
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-import app.keyboards as kb
 import app.database.requests as rq
 import requests
 import json
+import random  # 🔥 ИЗМЕНЕНИЕ: добавили random для мока скоринга
 
 router = Router()
+
+# 🔥 ИЗМЕНЕНИЕ: Явный API-ключ Yandex GPT (временно)
+YANDEX_GPT_API_KEY = "AQVNzpC6YgzXzixqHMjlWioapUB9MSNhgD5xv9Br"  # ← Вставьте свой API-ключ здесь
 
 class Scoring(StatesGroup):
     name = State()
     number = State()
     inn = State()
-    
 
+### 📌 1. Запрос согласия перед регистрацией
 @router.message(CommandStart())
 async def start_command(message: Message):
-    await rq.set_user(message.from_user.id)
-    await message.answer('Добро пожаловать в finalb помомшник!\nЯ умею:\n/scoring - проведение скоринга')
+    consent_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Да, согласен", callback_data="consent_granted")]
+        ]
+    )
+
+    await message.answer(
+        "Добро пожаловать в finalb помощник!\n"
+        "Перед использованием бота, пожалуйста, дайте согласие на обработку персональных данных.",
+        reply_markup=consent_markup
+    )
+
+@router.callback_query(lambda c: c.data == "consent_granted")
+async def process_consent(callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    
+    # Записываем ID в БД ТОЛЬКО ПОСЛЕ СОГЛАСИЯ
+    await rq.set_user(user_id)
+    await rq.update_data_permission(user_id, True)  # Фиксируем согласие
+    
+    await callback_query.message.edit_text(
+        "Спасибо за согласие! Теперь вы можете пользоваться ботом.\n\n"
+        "Доступные команды:\n"
+        "/scoring - Запуск скоринга\n"
+        "/revoke_consent - Отозвать согласие и удалить данные"
+    )
+    await callback_query.answer()
 
 
-@router.message(Command('assistent'))
-async def help_command(message: Message):
-    await message.answer('Я виртуальный финансовый аситсент! Чем я могу вам помочь')
+### 📌 2. Обработчик отзыва согласия и удаления данных
+@router.message(Command("revoke_consent"))
+async def revoke_consent_handler(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Да, удалить данные", callback_data="confirm_revoke")],
+            [InlineKeyboardButton(text="Отмена", callback_data="cancel_revoke")]
+        ]
+    )
+    
+    await message.answer(
+        "Вы уверены, что хотите отозвать согласие на обработку персональных данных? "
+        "Это действие удалит все ваши данные из системы!",
+        reply_markup=keyboard
+    )
 
+@router.callback_query(lambda c: c.data in ["confirm_revoke", "cancel_revoke"])
+async def process_revoke(callback_query: CallbackQuery):
+    if callback_query.data == "confirm_revoke":
+        await rq.delete_user(callback_query.from_user.id)
+        await callback_query.message.edit_text("Ваши данные успешно удалены. Вы можете снова зарегистрироваться в боте в любое время.")
+    else:
+        await callback_query.message.edit_text("Отмена удаления данных.")
+
+    await callback_query.answer()
+
+
+### 📌 3. Запрос скоринга только если есть согласие
 @router.message(Command('scoring'))
 async def register_command(message: Message, state: FSMContext):
-    consent_markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='Да, согласен', callback_data='yes')]])
+    user_id = message.from_user.id
+    user = await rq.get_user(user_id)
 
-    # Отправляем сообщение с кнопкой
-    await message.answer('Для скоринговой оценки понадобится следующее разрешение: согласны ли вы на обработку персональных данных?', reply_markup=consent_markup)
+    # Проверяем, есть ли пользователь и дал ли он согласие
+    if not user or not user.data_permission:
+        await message.answer("Вы не дали согласие на обработку персональных данных. Используйте /start, чтобы дать согласие.")
+        return
 
-@router.callback_query(lambda c: c.data == 'yes')
-async def process_consent(callback_query: CallbackQuery, state: FSMContext):
-    await callback_query.answer()  # Закрываем всплывающее окно
-    user_id = callback_query.from_user.id
-    # Записываем согласие в базу данных
-    await rq.update_data_permission(user_id, True)  # Установите permission в True
-
+    # Начинаем сбор данных (ФИО)
     await state.set_state(Scoring.name)
-    await callback_query.message.answer('Спасибо за согласие! Теперь введите ваше ФИО')
+    await message.answer("Введите ваше ФИО")
 
 
+### 📌 4. Сбор данных (ФИО, телефон, ИНН)
 @router.message(Scoring.name)
 async def register_name(message: Message, state: FSMContext):
-     await state.update_data(name=message.text)
-     await state.set_state(Scoring.number)
-     await message.answer('Введите ваш номер телефона')
+    await state.update_data(name=message.text)
+    await state.set_state(Scoring.number)
+    await message.answer('Введите ваш номер телефона')
 
 @router.message(Scoring.number)
 async def register_number(message: Message, state: FSMContext):
-     await state.update_data(number=message.text)
-     await state.set_state(Scoring.inn)
-     await message.answer('Введите ваш инн')
+    await state.update_data(number=message.text)
+    await state.set_state(Scoring.inn)
+    await message.answer('Введите ваш ИНН')
+
+
+### 🔥 ИЗМЕНЕНИЕ: Вернул мок-имитацию вызова скорингового API
+async def get_mock_scoring(inn: str) -> int:
+    """Мок-запрос к внешнему скоринговому API"""
+    print(f"[MOCK API] Запрос скоринга для ИНН: {inn}")
+    
+    # Генерируем случайный рейтинг от 10 до 100 (как будто API его вернул)
+    return random.randint(10, 100)
+
 
 @router.message(Scoring.inn)
 async def register_inn(message: Message, state: FSMContext):
@@ -209,7 +268,8 @@ async def fix_marker(callback_query: CallbackQuery):
 
     # Отправляем ответ пользователю
     await callback_query.message.answer(
-        f"Информация о том, как устранить проблему '{marker_name}':\n{gpt_response}"
+        f"<b>Информация о том, как устранить проблему:</b> <b>{marker_name}</b>\n\n{gpt_response}",
+        parse_mode="HTML"
     )
 
 async def query_yandex_gpt(marker_name: str) -> str:
@@ -240,7 +300,7 @@ async def query_yandex_gpt(marker_name: str) -> str:
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": "Api-Key AQVN2v80bFuxVQGnizZzIzeC6W3l8jZrvmjEIOTk"
+        "Authorization": "Api-Key AQVNzpC6YgzXzixqHMjlWioapUB9MSNhgD5xv9Br"
     }
 
     response = requests.post(url, headers=headers, json=prompt)
