@@ -39,8 +39,8 @@ async def update_data_permission(tg_id: int, permission: bool):
         print(f"[INFO] Обновлено согласие на ПД для {tg_id}: {permission}")
 
 
-async def update_user_data(tg_id: int, name: str, phone_number: str, inn: str):
-    """Обновляет персональные данные пользователя"""
+async def update_user_data(tg_id: int, name: str, phone_number: str, inn: str, marketplace_link: str):  
+    """Обновляет персональные данные пользователя, включая ссылку на маркетплейс"""
     async with async_session() as session:
         await session.execute(
             update(User)
@@ -48,11 +48,12 @@ async def update_user_data(tg_id: int, name: str, phone_number: str, inn: str):
             .values(
                 user_name=name,
                 phone_number=phone_number,
-                inn=inn
+                inn=inn,
+                marketplace_link=marketplace_link  
             )
         )
         await session.commit()
-        print(f"[INFO] Данные пользователя {tg_id} обновлены")
+        print(f"[INFO] Данные пользователя {tg_id} обновлены, включая ссылку на маркетплейс")
 
 
 async def delete_user(tg_id: int):

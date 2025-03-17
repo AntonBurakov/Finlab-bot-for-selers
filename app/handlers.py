@@ -6,9 +6,14 @@ from aiogram.fsm.context import FSMContext
 from unittest.mock import patch
 
 import app.database.requests as rq
+from app.scoring_utils.wildberries import fetch_wildberries_data
+from app.scoring_utils.checko import fetch_checko_data
+from app.scoring_utils.historical_excel import get_seller_data_from_excel
+from app.scoring_utils.scoring_risks import RiskAnalysis
 import requests
 import json
-import random  # 🔥 ИЗМЕНЕНИЕ: добавили random для мока скоринга
+import random  
+import re
 
 router = Router()
 
@@ -19,6 +24,7 @@ class Scoring(StatesGroup):
     name = State()
     number = State()
     inn = State()
+    marketplace_link = State()
 
 ### 📌 1. Запрос согласия перед регистрацией
 @router.message(CommandStart())
@@ -109,99 +115,101 @@ async def register_number(message: Message, state: FSMContext):
     await message.answer('Введите ваш ИНН')
 
 
-### 🔥 ИЗМЕНЕНИЕ: Вернул мок-имитацию вызова скорингового API
-async def get_mock_scoring(inn: str) -> int:
-    """Мок-запрос к внешнему скоринговому API"""
-    print(f"[MOCK API] Запрос скоринга для ИНН: {inn}")
-    
-    # Генерируем случайный рейтинг от 10 до 100 (как будто API его вернул)
-    return random.randint(10, 100)
-
 
 @router.message(Scoring.inn)
 async def register_inn(message: Message, state: FSMContext):
     await state.update_data(inn=message.text)
+    await state.set_state(Scoring.marketplace_link)
+    await message.answer("Введите ссылку на ваш профиль в маркетплейсе")
+
+
+
+@router.message(Scoring.marketplace_link)
+async def register_marketplace_link(message: Message, state: FSMContext):
+    await state.update_data(marketplace_link=message.text)  # 🔥 Сохраняем ссылку
     data = await state.get_data()
 
     await rq.update_user_data(
         tg_id=message.from_user.id, 
         name=data.get("name"),  # Имя
         phone_number=data.get("number"),  # Номер телефона
-        inn=data["inn"]  # ИНН
+        inn=data["inn"],  # ИНН
+        marketplace_link=data["marketplace_link"]  # Добавляем ссылку
     )
-    
-    url = f'https://focus-api.kontur.ru/api3/scoring?inn={data["inn"]}&key=DEMO493156a753c0d86fb24c130fae824427c93a'
 
-    # Пример ответа от API
-    mock_response_data = [
-        {
-            "inn": "1234567890",
-            "ogrn": "1234567890123",
-            "focusHref": "https://focus.kontur.ru/card/1234567890",
-            "scoringData": [
-                {
-                    "modelId": "model_1",
-                    "modelName": "Standard Scoring Model",
-                    "modelUpdateDate": "2024-01-01",
-                    "rating": 39,
-                    "ratingLevel": "High",
-                    "triggeredMarkers": [
-                        {
-                            "markerId": "marker_1",
-                            "impact": "Reliability",
-                            "weight": "Moderate",
-                            "name": "Отсутствие уставного капитала",
-                            "description": "Отсутствие уставного капитала."
-                        },
-                        {
-                            "markerId": "marker_2",
-                            "impact": "Reliability",
-                            "weight": "Moderate",
-                            "name": "Задолженности",
-                            "description": "Задолженности на сумму 450 000 рублей."
-                        }
-                    ]
-                }
-            ]
-        }
-    ]
+    # **Получаем seller_id из marketplace_link**
+    seller_id_match = re.search(r"/seller/(\d+)", data["marketplace_link"])
+    if not seller_id_match:
+        await message.answer("Ошибка: Не удалось извлечь seller_id из ссылки.")
+        return
 
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.json.return_value = mock_response_data
-        response = requests.get(url)
-        responseData = response.json()
+    seller_id = seller_id_match.group(1)
 
-        # Получаем рейтинг из замоканного ответа
-        rating = responseData[0]['scoringData'][0]['rating']
-        markers = responseData[0]['scoringData'][0]['triggeredMarkers']
+    # **Запрашиваем данные от Wildberries API**
+    wildberries_data = await fetch_wildberries_data(seller_id)
 
-        # Определяем эмодзи на основе рейтинга
-        if 0 <= rating <= 39:
-            emoji = "🔴"
-        elif 40 <= rating <= 69:
-            emoji = "🟡"
-        elif 70 <= rating <= 100:
-            emoji = "🟢"
-        else:
-            emoji = "❓"
+    checko_data = await fetch_checko_data(data["inn"])
 
-        await message.answer(
-            f'Ваше имя: {data.get("name", "Не указано")}\n'
-            f'Ваш инн: {data["inn"]}\n'
-            f'Номер: {data.get("number", "Не указан")}\n'
-            f'Ваш скоринговый рейтинг: {rating} {emoji}'
-        )
+    excel_data = get_seller_data_from_excel("Истор данные.xlsx", data["marketplace_link"])
+
+    # **Вывод данных пользователю**
+    await message.answer(
+        f"✅ Данные успешно собраны!\n\n"
+        f"📌 <b>ФИО:</b> {data.get('name', 'Не указано')}\n"
+        f"📌 <b>ИНН:</b> {data['inn']}\n"
+        f"📌 <b>Номер:</b> {data.get('number', 'Не указан')}\n"
+        f"📌 <b>Профиль Wildberries:</b> {data['marketplace_link']}\n\n"
+        f"📊 <b>Данные Wildberries:</b>\n"
+        f"⭐ Оценка: {wildberries_data.get('valuation', 'Нет данных')}\n"
+        f"💬 Отзывы: {wildberries_data.get('feedbacks_count', 'Нет данных')}\n"
+        f"📦 Продажи: {wildberries_data.get('sale_quantity', 'Нет данных')}\n"        
+        f"🛑 Недобросовестный блок: {checko_data.get('Недобросовестный блок', 'Нет данных')}\n"
+        f"👨‍💼 Массовый руководитель: {checko_data.get('Массовый руководитель', 'Нет данных')}\n"
+        f"🏢 Массовый учредитель: {checko_data.get('Массовый учредитель', 'Нет данных')}\n"
+        f"⚠️ Санкции: {checko_data.get('Санкции', 'Нет данных')}\n"
+        f"📦 Раздел товаров: {excel_data.get('Раздел товаров', 'Нет данных')}\n"
+        f"🛍️ Категория товаров: {excel_data.get('Категория товаров', 'Нет данных')}",
+        parse_mode="HTML"
+    )
+
+    # **Создаем объект анализа рисков**
+    risk_analysis = RiskAnalysis()
+    risk_analysis.analyze({
+        "valuation": wildberries_data.get("valuation"),
+        "feedbacks_count": wildberries_data.get("feedbacks_count"),
+        "sale_quantity": wildberries_data.get("sale_quantity"),
+        "mass_rukovod": checko_data.get("mass_rukovod"),
+        "sanctions": checko_data.get("sanctions"),
+        "category": excel_data.get("Категория товаров")
+    })
+
+    # **Получаем результаты анализа**
+    risks = risk_analysis.get_results()
+
+    # **Формируем вывод с HTML-экранированием**
+    def escape_html(text):
+        return str(text).replace("<", "&lt;").replace(">", "&gt;")
+
+    risk_summary = "\n".join(
+        [f"🔴 {escape_html(r)}" for r in risks["high_risks"]] +
+        [f"🟠 {escape_html(r)}" for r in risks["medium_risks"]] +
+        [f"🟡 {escape_html(r)}" for r in risks["low_risks"]]
+    )
+
+    # **Отправляем пользователю анализ рисков**
+    print(f"Отправляемое сообщение:\n{risk_summary}")  # Отладочный вывод перед отправкой
+
+    await message.answer(
+        f"📊 <b>Анализ рисков:</b>\n{risk_summary if risk_summary else 'Риски не выявлены'}",
+        parse_mode="HTML"
+    )
+
+    # **Завершаем FSM и очищаем состояние**
+    await state.clear()
 
 
-        if markers:
-            await message.answer(
-                'Обнаружено несколько причин низкой скоринговой оценки. Хотите ли вы посмотреть на них?',
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text='Да', callback_data='show_reasons')]
-                ])
-            )
 
-        await state.clear()
+
 
 
 @router.callback_query(lambda c: c.data == 'show_reasons')
