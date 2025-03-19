@@ -14,6 +14,7 @@ import requests
 import json
 import random  
 import re
+import html 
 
 router = Router()
 
@@ -186,6 +187,8 @@ async def register_marketplace_link(message: Message, state: FSMContext):
     # **Получаем результаты анализа**
     risks = risk_analysis.get_results()
 
+    await state.update_data(risks=json.dumps(risks))
+
     # **Формируем вывод с HTML-экранированием**
     def escape_html(text):
         return str(text).replace("<", "&lt;").replace(">", "&gt;")
@@ -196,92 +199,140 @@ async def register_marketplace_link(message: Message, state: FSMContext):
         [f"🟡 {escape_html(r)}" for r in risks["low_risks"]]
     )
 
-    # **Отправляем пользователю анализ рисков**
-    print(f"Отправляемое сообщение:\n{risk_summary}")  # Отладочный вывод перед отправкой
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💡 Получить консультацию", callback_data="consult_risks")]
+        ]
+    ) if any(risks.values()) else None
 
     await message.answer(
         f"📊 <b>Анализ рисков:</b>\n{risk_summary if risk_summary else 'Риски не выявлены'}",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=keyboard
     )
 
-    # **Завершаем FSM и очищаем состояние**
-    await state.clear()
 
+@router.callback_query(lambda c: c.data == "consult_risks")
+async def choose_risk_category(callback_query: CallbackQuery, state: FSMContext):
+    """
+    Позволяет пользователю выбрать категорию риска для получения консультации.
+    """
+    # Получаем сохранённые риски из state
+    data = await state.get_data()
+    risks = json.loads(data.get("risks", "{}"))  
 
+    risk_counts = {
+        "high": len(risks.get("high_risks", [])),
+        "medium": len(risks.get("medium_risks", [])),
+        "low": len(risks.get("low_risks", []))
+    }
 
+    if all(count == 0 for count in risk_counts.values()):
+        await callback_query.message.answer("✅ У вас нет выявленных рисков.")
+        return
 
+    # Создаём кнопки только для тех категорий, где есть риски
+    keyboard_buttons = []
+    if risk_counts["high"] > 0:
+        keyboard_buttons.append([InlineKeyboardButton(text=f"🔴 Высокий ({risk_counts['high']})", callback_data="risk_category_high")])
+    if risk_counts["medium"] > 0:
+        keyboard_buttons.append([InlineKeyboardButton(text=f"🟠 Средний ({risk_counts['medium']})", callback_data="risk_category_medium")])
+    if risk_counts["low"] > 0:
+        keyboard_buttons.append([InlineKeyboardButton(text=f"🟡 Низкий ({risk_counts['low']})", callback_data="risk_category_low")])
 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
-@router.callback_query(lambda c: c.data == 'show_reasons')
-async def show_reasons(callback_query: CallbackQuery, state: FSMContext):
-    await callback_query.answer() 
-
-    mock_response_data = [
-        {
-            "inn": "1234567890",
-            "ogrn": "1234567890123",
-            "focusHref": "https://focus.kontur.ru/card/1234567890",
-            "scoringData": [
-                {
-                    "modelId": "model_1",
-                    "modelName": "Standard Scoring Model",
-                    "modelUpdateDate": "2024-01-01",
-                    "rating": 39, 
-                    "ratingLevel": "High",
-                    "triggeredMarkers": [
-                        {
-                            "markerId": "marker_1",
-                            "impact": "Reliability",
-                            "weight": "Moderate",
-                            "name": "Отсутствие уставного капитала",
-                            "description": "Отсутствие уставного капитала."
-                        },
-                        {
-                            "markerId": "marker_2",
-                            "impact": "Reliability",
-                            "weight": "Moderate",
-                            "name": "Задолженности",
-                            "description": "Задолженности на сумму 450 000 рублей."
-                        }
-                    ]
-                }
-            ]
-        }
-    ]
-
-    markers = mock_response_data[0]['scoringData'][0]['triggeredMarkers']
-
-    for marker in markers:
-        await callback_query.message.answer(
-            f'Причина: {marker["name"]}\n'
-            f'Описание: {marker["description"]}\n'
-            f'Хотите узнать, как это можно устранить?'
-        )
-
-        await callback_query.message.answer(
-            'Нажмите на кнопку, чтобы узнать, как это исправить.',
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text='Узнать', callback_data=f'fix_{marker["name"]}')]
-            ])
-        )
-
-# Обработчик нажатия на кнопку с предложением узнать, как исправить проблему
-@router.callback_query(lambda c: c.data.startswith('fix_'))
-async def fix_marker(callback_query: CallbackQuery):
-    # Извлекаем имя маркера из данных кнопки
-    marker_name = callback_query.data[4:]  # Убираем 'fix_' из начала строки
-
-    # Запрашиваем информацию у Yandex GPT о том, как исправить проблему
-    gpt_response = await query_yandex_gpt(marker_name)
-
-    # Отправляем ответ пользователю
     await callback_query.message.answer(
-        f"<b>Информация о том, как устранить проблему:</b> <b>{marker_name}</b>\n\n{gpt_response}",
+        "📌 Выберите категорию риска, по которой хотите получить консультацию:",
+        reply_markup=keyboard
+    )
+    await callback_query.answer()
+
+
+
+@router.callback_query(lambda c: c.data.startswith("risk_category_"))
+async def choose_specific_risk(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Показывает пользователю конкретные риски в выбранной категории.
+    """
+    category = callback_query.data.split("_")[-1]  # Получаем категорию риска (high, medium, low)
+
+    # 🔥 Исправление: Загружаем данные и конвертируем JSON-строку обратно в словарь
+    data = await state.get_data()
+    risks = data.get("risks", "{}")  # Если нет рисков, подставляем пустой JSON
+
+    if isinstance(risks, str):  # Если строка, преобразуем обратно
+        try:
+            risks = json.loads(risks)
+        except json.JSONDecodeError:
+            risks = {}
+
+    # 🔍 Отладка
+    print(f"📊 Риски в категории {category}: {risks}")
+
+    risk_list = risks.get(f"{category}_risks", [])
+
+    if not risk_list:
+        await callback_query.message.answer("❌ В данной категории рисков нет.")
+        return
+
+    # 🔥 Исправление: поменяли `_` на `:` в callback_data
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=risk, callback_data=f"fix_risk:{risk}")] for risk in risk_list
+        ]
+    )
+
+    await callback_query.message.answer(
+        f"Выберите конкретный риск в категории {'🔴 Высокий' if category == 'high' else '🟠 Средний' if category == 'medium' else '🟡 Низкий'} для консультации:",
+        reply_markup=keyboard
+    )
+    await callback_query.answer()
+
+
+
+
+import re
+from html import escape
+
+@router.callback_query(lambda c: c.data.startswith("fix_risk:"))
+async def fix_specific_risk(callback_query: types.CallbackQuery):
+    """
+    Отправляет конкретный риск в Yandex GPT и получает рекомендации.
+    """
+    risk_name = callback_query.data.split("fix_risk:")[-1]
+    print(f"🛠 Выбранный риск: {risk_name}")  
+
+    # Запрашиваем советы у Yandex GPT
+    gpt_response = await query_yandex_gpt(risk_name)
+
+    # 🔥 Преобразуем `**жирный текст**` в `<b>жирный текст</b>`
+    formatted_gpt_response = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", gpt_response)
+
+    # Удаляем все лишние звездочки `*`
+    formatted_gpt_response = formatted_gpt_response.replace("*", "")
+
+    # Экранируем опасные символы, но оставляем HTML-теги `<b>...</b>`
+    formatted_gpt_response = escape(formatted_gpt_response, quote=False)
+
+    # Убираем экранирование тегов `<b>...</b>` после `escape()`
+    formatted_gpt_response = formatted_gpt_response.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
+
+    print(f"✅ Отправляемое сообщение:\n{formatted_gpt_response}")  # Проверяем перед отправкой
+
+    # 🚀 Отправляем сообщение
+    await callback_query.message.answer(
+        f"📌 <b>Консультация по риску:</b> <b>{escape(risk_name)}</b>\n\n"
+        f"{formatted_gpt_response}",
         parse_mode="HTML"
     )
+    await callback_query.answer()
+
+
 
 async def query_yandex_gpt(marker_name: str) -> str:
-    # Выполнение запроса к Yandex GPT
+    print(f"🔍 Отправляем в GPT: {marker_name}")  # 🔥 Логируем запрос
+
     prompt = {
         "modelUri": "gpt://b1gtrijf1l4e7qqg3o8m/yandexgpt-lite",
         "completionOptions": {
@@ -295,15 +346,14 @@ async def query_yandex_gpt(marker_name: str) -> str:
                 "text": "Ты финансовый консультант.\
                 К тебе пришел клиент с причиной низкой скоринговой оценки.\
                 Предложи ему пути решения проблемы для повышения скоринговой оценки.\
-                Не грузи клиента, дай максимум 3 совета"
+                Не грузи клиента, дай максимум 3 совета."
             },
             {
                 "role": "user",
-                "text": "{marker_name}"
+                "text": marker_name
             }
         ]
     }
-
 
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
     headers = {
@@ -314,6 +364,10 @@ async def query_yandex_gpt(marker_name: str) -> str:
     response = requests.post(url, headers=headers, json=prompt)
 
     if response.status_code == 200:
-        return response.json()['result']['alternatives'][0]['message']['text']
+        gpt_text = response.json()['result']['alternatives'][0]['message']['text']
+        print(f"✅ GPT ответ: {gpt_text}")  # 🔍 Логируем ответ от GPT
+        return gpt_text
     else:
-        return f"Ошибка: {response.status_code}, {response.text}"
+        error_msg = f"Ошибка: {response.status_code}, {response.text}"
+        print(f"❌ GPT ошибка: {error_msg}")  # 🔥 Логируем ошибку
+        return error_msg
