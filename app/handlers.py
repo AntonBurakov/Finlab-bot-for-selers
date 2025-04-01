@@ -30,6 +30,7 @@ class Scoring(StatesGroup):
 ### 📌 1. Запрос согласия перед регистрацией
 @router.message(CommandStart())
 async def start_command(message: Message):
+    print(f"Получено сообщение: {message.text} от {message.from_user.id}")
     consent_markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Да, согласен", callback_data="consent_granted")]
@@ -37,8 +38,9 @@ async def start_command(message: Message):
     )
 
     await message.answer(
-        "Добро пожаловать в finalb помощник!\n"
+        "👋 <b>Добро пожаловать в FinLab помощник!</b>\n\n"
         "Перед использованием бота, пожалуйста, дайте согласие на обработку персональных данных.",
+        parse_mode="HTML",
         reply_markup=consent_markup
     )
 
@@ -51,10 +53,11 @@ async def process_consent(callback_query: CallbackQuery):
     await rq.update_data_permission(user_id, True)  # Фиксируем согласие
     
     await callback_query.message.edit_text(
-        "Спасибо за согласие! Теперь вы можете пользоваться ботом.\n\n"
-        "Доступные команды:\n"
-        "/scoring - Запуск скоринга\n"
-        "/revoke_consent - Отозвать согласие и удалить данные"
+        "✅ <b>Спасибо за согласие!</b> Теперь вы можете пользоваться ботом.\n\n"
+        "📌 Доступные команды:\n"
+        "  • <b>/scoring</b> — Запуск скоринга\n"
+        "  • <b>/revoke_consent</b> — Отозвать согласие и удалить данные",
+        parse_mode="HTML"
     )
     await callback_query.answer()
 
@@ -64,24 +67,23 @@ async def process_consent(callback_query: CallbackQuery):
 async def revoke_consent_handler(message: types.Message):
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Да, удалить данные", callback_data="confirm_revoke")],
-            [InlineKeyboardButton(text="Отмена", callback_data="cancel_revoke")]
+            [InlineKeyboardButton(text="🗑️ Да, удалить данные", callback_data="confirm_revoke")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_revoke")]
         ]
     )
     
     await message.answer(
-        "Вы уверены, что хотите отозвать согласие на обработку персональных данных? "
-        "Это действие удалит все ваши данные из системы!",
-        reply_markup=keyboard
+        "⚠️ <b>Вы уверены, что хотите удалить все ваши данные?</b>\n"
+        "Это действие необратимо!", parse_mode="HTML", reply_markup=keyboard
     )
 
 @router.callback_query(lambda c: c.data in ["confirm_revoke", "cancel_revoke"])
 async def process_revoke(callback_query: CallbackQuery):
     if callback_query.data == "confirm_revoke":
         await rq.delete_user(callback_query.from_user.id)
-        await callback_query.message.edit_text("Ваши данные успешно удалены. Вы можете снова зарегистрироваться в боте в любое время.")
+        await callback_query.message.edit_text("✅ Ваши данные успешно удалены.")
     else:
-        await callback_query.message.edit_text("Отмена удаления данных.")
+        await callback_query.message.edit_text("❌ Удаление отменено.")
 
     await callback_query.answer()
 
@@ -94,12 +96,12 @@ async def register_command(message: Message, state: FSMContext):
 
     # Проверяем, есть ли пользователь и дал ли он согласие
     if not user or not user.data_permission:
-        await message.answer("Вы не дали согласие на обработку персональных данных. Используйте /start, чтобы дать согласие.")
+        await message.answer("❌ Вы не дали согласие на обработку персональных данных. Введите /start, чтобы продолжить.")
         return
 
     # Начинаем сбор данных (ФИО)
     await state.set_state(Scoring.name)
-    await message.answer("Введите ваше ФИО")
+    await message.answer("✍️ <b>Введите ваше ФИО</b>", parse_mode="HTML")
 
 
 ### 📌 4. Сбор данных (ФИО, телефон, ИНН)
@@ -107,13 +109,13 @@ async def register_command(message: Message, state: FSMContext):
 async def register_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
     await state.set_state(Scoring.number)
-    await message.answer('Введите ваш номер телефона')
+    await message.answer("📞 <b>Введите ваш номер телефона</b>", parse_mode="HTML")
 
 @router.message(Scoring.number)
 async def register_number(message: Message, state: FSMContext):
     await state.update_data(number=message.text)
     await state.set_state(Scoring.inn)
-    await message.answer('Введите ваш ИНН')
+    await message.answer("🔢 <b>Введите ваш ИНН</b>", parse_mode="HTML")
 
 
 
@@ -121,7 +123,7 @@ async def register_number(message: Message, state: FSMContext):
 async def register_inn(message: Message, state: FSMContext):
     await state.update_data(inn=message.text)
     await state.set_state(Scoring.marketplace_link)
-    await message.answer("Введите ссылку на ваш профиль в маркетплейсе")
+    await message.answer("🔗 <b>Введите ссылку на ваш профиль в маркетплейсе</b>", parse_mode="HTML")
 
 
 
@@ -153,23 +155,30 @@ async def register_marketplace_link(message: Message, state: FSMContext):
 
     excel_data = get_seller_data_from_excel("Истор данные.xlsx", data["marketplace_link"])
 
-    # **Вывод данных пользователю**
     await message.answer(
-        f"✅ Данные успешно собраны!\n\n"
-        f"📌 <b>ФИО:</b> {data.get('name', 'Не указано')}\n"
-        f"📌 <b>ИНН:</b> {data['inn']}\n"
-        f"📌 <b>Номер:</b> {data.get('number', 'Не указан')}\n"
-        f"📌 <b>Профиль Wildberries:</b> {data['marketplace_link']}\n\n"
+        f"✅ <b>Данные успешно собраны!</b>\n"
+        f"──────────────────────────────\n"
+        f"👤 <b>Личные данные:</b>\n"
+        f"   🔹 <b>ФИО:</b> {data.get('name', 'Не указано')}\n"
+        f"   🔹 <b>ИНН:</b> {data['inn']}\n"
+        f"   🔹 <b>Номер:</b> {data.get('number', 'Не указан')}\n"
+        f"   🔹 <b>Wildberries:</b> <a href='{data['marketplace_link']}'>Профиль</a>\n"
+        f"──────────────────────────────\n"
         f"📊 <b>Данные Wildberries:</b>\n"
-        f"⭐ Оценка: {wildberries_data.get('valuation', 'Нет данных')}\n"
-        f"💬 Отзывы: {wildberries_data.get('feedbacks_count', 'Нет данных')}\n"
-        f"📦 Продажи: {wildberries_data.get('sale_quantity', 'Нет данных')}\n"        
-        f"🛑 Недобросовестный блок: {checko_data.get('Недобросовестный блок', 'Нет данных')}\n"
-        f"👨‍💼 Массовый руководитель: {checko_data.get('Массовый руководитель', 'Нет данных')}\n"
-        f"🏢 Массовый учредитель: {checko_data.get('Массовый учредитель', 'Нет данных')}\n"
-        f"⚠️ Санкции: {checko_data.get('Санкции', 'Нет данных')}\n"
-        f"📦 Раздел товаров: {excel_data.get('Раздел товаров', 'Нет данных')}\n"
-        f"🛍️ Категория товаров: {excel_data.get('Категория товаров', 'Нет данных')}",
+        f"   ⭐ <b>Оценка:</b> {wildberries_data.get('valuation', 'Нет данных')}\n"
+        f"   💬 <b>Отзывы:</b> {wildberries_data.get('feedbacks_count', 'Нет данных')}\n"
+        f"   📦 <b>Продажи:</b> {wildberries_data.get('sale_quantity', 'Нет данных')}\n"
+        f"──────────────────────────────\n"
+        f"⚠️ <b>Дополнительные проверки:</b>\n"
+        f"   🛑 <b>Недобросовестный блок:</b> {checko_data.get('Недобросовестный блок', 'Нет данных')}\n"
+        f"   👨‍💼 <b>Массовый руководитель:</b> {checko_data.get('Массовый руководитель', 'Нет данных')}\n"
+        f"   🏢 <b>Массовый учредитель:</b> {checko_data.get('Массовый учредитель', 'Нет данных')}\n"
+        f"   ⚠️ <b>Санкции:</b> {checko_data.get('Санкции', 'Нет данных')}\n"
+        f"──────────────────────────────\n"
+        f"🛍️ <b>Категории товаров:</b>\n"
+        f"   📦 <b>Раздел:</b> {excel_data.get('Раздел товаров', 'Нет данных')}\n"
+        f"   🏷️ <b>Категория:</b> {excel_data.get('Категория товаров', 'Нет данных')}\n"
+        f"──────────────────────────────\n",
         parse_mode="HTML"
     )
 
@@ -199,11 +208,23 @@ async def register_marketplace_link(message: Message, state: FSMContext):
         [f"🟡 {escape_html(r)}" for r in risks["low_risks"]]
     )
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💡 Получить консультацию", callback_data="consult_risks")]
-        ]
-    ) if any(risks.values()) else None
+
+    # **Формируем кнопки в зависимости от рисков**
+    keyboard_buttons = []
+
+    if len(risks["high_risks"]) == 0:  # ✅ Если нет высоких рисков, предлагаем кредиты
+        keyboard_buttons.extend([
+            [InlineKeyboardButton(text="🏦 Кредит для бизнеса (Альфа-Банк)", url="https://finlab.ru/credits/alfa/kredit-dlya-biznesa")],
+            [InlineKeyboardButton(text="🏗️ Кредит на госконтракт (Металлинвест)", url="https://finlab.ru/credits/metallinvestbank/metall-ekspress-kredit-na-goskontrakt")]
+        ])
+
+    # ✅ Добавляем кнопку "Получить консультацию" В ЛЮБОМ СЛУЧАЕ
+    keyboard_buttons.append(
+        [InlineKeyboardButton(text="💡 Получить консультацию", callback_data="consult_risks")]
+    )
+
+    # ❗ ЗДЕСЬ НЕ НУЖНА ПРОВЕРКА `any(risks.values())`
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
     await message.answer(
         f"📊 <b>Анализ рисков:</b>\n{risk_summary if risk_summary else 'Риски не выявлены'}",
@@ -279,7 +300,8 @@ async def choose_specific_risk(callback_query: types.CallbackQuery, state: FSMCo
     # 🔥 Исправление: поменяли `_` на `:` в callback_data
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=risk, callback_data=f"fix_risk:{risk}")] for risk in risk_list
+            [InlineKeyboardButton(text=risk, callback_data=f"fix_risk|{category}|{i}")]
+            for i, risk in enumerate(risk_list)
         ]
     )
 
@@ -295,35 +317,46 @@ async def choose_specific_risk(callback_query: types.CallbackQuery, state: FSMCo
 import re
 from html import escape
 
-@router.callback_query(lambda c: c.data.startswith("fix_risk:"))
-async def fix_specific_risk(callback_query: types.CallbackQuery):
+import re
+from html import escape
+
+@router.callback_query(lambda c: c.data.startswith("fix_risk|"))
+async def fix_specific_risk(callback_query: types.CallbackQuery, state: FSMContext):
     """
     Отправляет конкретный риск в Yandex GPT и получает рекомендации.
     """
-    risk_name = callback_query.data.split("fix_risk:")[-1]
-    print(f"🛠 Выбранный риск: {risk_name}")  
+    try:
+        _, category, risk_index = callback_query.data.split("|")  
+        risk_index = int(risk_index)
+    except ValueError:
+        await callback_query.message.answer("❌ Ошибка: неверный формат данных.")
+        return
 
-    # Запрашиваем советы у Yandex GPT
+    # Загружаем риски из state
+    data = await state.get_data()
+    risks = json.loads(data.get("risks", "{}"))
+    
+    category_key = f"{category}_risks"
+    risk_list = risks.get(category_key, [])
+
+    if risk_index >= len(risk_list):
+        await callback_query.message.answer("❌ Ошибка: риск не найден.")
+        return
+
+    risk_name = risk_list[risk_index]
+
+    # 🔥 Получаем ответ от Yandex GPT
     gpt_response = await query_yandex_gpt(risk_name)
 
-    # 🔥 Преобразуем `**жирный текст**` в `<b>жирный текст</b>`
-    formatted_gpt_response = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", gpt_response)
+    # **ОЧИСТКА ТЕКСТА ОТ ОШИБОК**
+    gpt_response = escape(gpt_response, quote=False)  # Экранируем HTML
+    gpt_response = gpt_response.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")  # Восстанавливаем теги
+    gpt_response = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", gpt_response)  # **жирный** → <b>жирный</b>
+    gpt_response = gpt_response.replace("*", "")  # Убираем звездочки
 
-    # Удаляем все лишние звездочки `*`
-    formatted_gpt_response = formatted_gpt_response.replace("*", "")
-
-    # Экранируем опасные символы, но оставляем HTML-теги `<b>...</b>`
-    formatted_gpt_response = escape(formatted_gpt_response, quote=False)
-
-    # Убираем экранирование тегов `<b>...</b>` после `escape()`
-    formatted_gpt_response = formatted_gpt_response.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
-
-    print(f"✅ Отправляемое сообщение:\n{formatted_gpt_response}")  # Проверяем перед отправкой
-
-    # 🚀 Отправляем сообщение
     await callback_query.message.answer(
         f"📌 <b>Консультация по риску:</b> <b>{escape(risk_name)}</b>\n\n"
-        f"{formatted_gpt_response}",
+        f"{gpt_response}",
         parse_mode="HTML"
     )
     await callback_query.answer()
