@@ -18,6 +18,7 @@ class User(Base):
     user_name: Mapped[str] = mapped_column(String, nullable=True)
     phone_number: Mapped[str] = mapped_column(String, nullable=True)
     inn: Mapped[str] = mapped_column(String, nullable=True)
+    marketplace_link: Mapped[str] = mapped_column(String, nullable=True)
 
 async def async_main():
     async with engine.begin() as conn:
