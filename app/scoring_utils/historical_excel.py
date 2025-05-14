@@ -4,7 +4,7 @@ def get_seller_data_from_excel(file_path: str, marketplace_link: str) -> dict:
     """
     Ищет `marketplace_link` в первом столбце Excel-файла и возвращает данные из колонок C и D.
 
-    :param file_path: Путь к Excel-файлу.
+    :param file_path: Путь к Excel-файлу со статистикой продаж.
     :param marketplace_link: Ссылка на продавца Wildberries.
     :return: Словарь с найденными данными.
     """
