@@ -9,9 +9,7 @@ from aiogram.fsm.context import FSMContext
 from unittest.mock import patch
 
 import app.database.requests as rq
-from app.scoring_utils.wildberries import fetch_wildberries_data
 from app.scoring_utils.historical_csv import get_seller_data_from_csv
-from app.scoring_utils.scoring_risks import RiskAnalysis
 import requests
 import json
 import random  
@@ -194,7 +192,7 @@ async def register_marketplace_link(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Ошибка при анализе Wildberries: {e}")
         return
-
+    
     # Собираем все риски
     risks = {
         "high_risks": [],
